@@ -1,0 +1,12 @@
+[project]
+name = "otc-p1-data"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.121.3",
+    "netcdf4>=1.7.2",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.38.0",
+]

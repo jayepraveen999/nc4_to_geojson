@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NC4 to GeoJSON Converter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <header>
+            <h1>NC4 to GeoJSON</h1>
+            <p class="subtitle">Convert NetCDF4 files to GeoJSON instantly in your browser</p>
+        </header>
+
+        <main>
+            <div id="drop-zone" class="drop-zone">
+                <div class="icon-container">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                </div>
+                <p class="primary-text">Drag & Drop .nc4 file here</p>
+                <p class="secondary-text">or</p>
+                <input type="file" id="file-input" accept=".nc4" hidden>
+                <button id="browse-btn" class="btn-primary">Browse Files</button>
+            </div>
+
+            <div id="status" class="status"></div>
+
+            <div id="actions-section" class="actions-section hidden">
+                <div class="button-group">
+                    <button id="download-btn" class="btn-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Download GeoJSON
+                    </button>
+                    <button id="preview-btn" class="btn-secondary">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                        </svg>
+                        Preview Data
+                    </button>
+                </div>
+                <div id="preview-container" class="preview-container hidden">
+                    <pre id="preview-content"></pre>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by h5wasm & WebAssembly</p>
+        </footer>
+    </div>
+    <script type="module">
+        import h5wasm from "https://cdn.jsdelivr.net/npm/h5wasm@0.7.4/dist/esm/hdf5_hl.js";
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const browseBtn = document.getElementById('browse-btn');
+        const statusDiv = document.getElementById('status');
+        const actionsSection = document.getElementById('actions-section');
+        const downloadBtn = document.getElementById('download-btn');
+        const previewBtn = document.getElementById('preview-btn');
+        const previewContainer = document.getElementById('preview-container');
+        const previewContent = document.getElementById('preview-content');
+
+        let currentGeoJSON = null;
+        let currentFileName = "";
+
+        browseBtn.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (!currentGeoJSON) return;
+
+            const blob = new Blob([JSON.stringify(currentGeoJSON)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+
+            // Fix filename: remove .nc or .nc4 (case insensitive) and append .geojson
+            let downloadName = currentFileName.replace(/\.nc4?$/i, '');
+            downloadName += '.geojson';
+
+            a.download = downloadName;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        });
+
+        previewBtn.addEventListener('click', () => {
+            if (!currentGeoJSON) return;
+
+            if (previewContainer.classList.contains('hidden')) {
+                // Show preview
+                const previewData = {
+                    type: currentGeoJSON.type,
+                    featuresCount: currentGeoJSON.features.length,
+                    first5Features: currentGeoJSON.features.slice(0, 5)
+                };
+                previewContent.textContent = JSON.stringify(previewData, null, 2);
+                previewContainer.classList.remove('hidden');
+                previewBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    Hide Preview
+                `;
+            } else {
+                // Hide preview
+                previewContainer.classList.add('hidden');
+                previewBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    Preview Data
+                `;
+            }
+        });
+
+        async function handleFile(file) {
+            if (!file.name.endsWith('.nc4')) {
+                statusDiv.textContent = 'Error: Please upload a .nc4 file.';
+                statusDiv.className = 'status error';
+                return;
+            }
+
+            // Reset UI
+            statusDiv.textContent = 'Initializing h5wasm and converting...';
+            statusDiv.className = 'status';
+            actionsSection.classList.add('hidden');
+            previewContainer.classList.add('hidden');
+            currentGeoJSON = null;
+            currentFileName = file.name;
+
+            try {
+                const { FS } = await h5wasm.ready;
+
+                const arrayBuffer = await file.arrayBuffer();
+                const fileName = file.name;
+
+                // Write file to WASM virtual filesystem
+                FS.writeFile(fileName, new Uint8Array(arrayBuffer));
+
+                const f = new h5wasm.File(fileName, "r");
+
+                // Read variables
+                // Note: h5wasm returns data as typed arrays. We need to convert them to normal arrays for GeoJSON
+                const lonVar = f.get("lon");
+                const latVar = f.get("lat");
+
+                if (!lonVar || !latVar) {
+                    throw new Error("Could not find 'lon' or 'lat' variables in the file.");
+                }
+
+                const lonData = lonVar.value;
+                const latData = latVar.value;
+
+                const lonLatList = [];
+                for (let i = 0; i < lonData.length; i++) {
+                    lonLatList.push([Number(lonData[i]), Number(latData[i])]);
+                }
+
+                const features = [
+                    {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "MultiPoint",
+                            "coordinates": lonLatList
+                        }
+                    }
+                ];
+
+                // Check for extent attribute
+                // In h5wasm, attributes are accessed via .attrs
+                // The python code used json.loads(ds.extent), implying it's a JSON string
+                if (f.attrs["extent"]) {
+                    try {
+                        const extentJson = JSON.parse(f.attrs["extent"].value);
+                        features.push({
+                            "type": "Feature",
+                            "geometry": extentJson
+                        });
+                    } catch (e) {
+                        console.warn("Failed to parse extent attribute:", e);
+                    }
+                }
+
+                currentGeoJSON = {
+                    "type": "FeatureCollection",
+                    "features": features
+                };
+
+                f.close();
+                // Clean up file from WASM FS
+                FS.unlink(fileName);
+
+                statusDiv.textContent = 'Conversion successful! Ready to download.';
+                statusDiv.className = 'status success';
+                actionsSection.classList.remove('hidden');
+
+            } catch (error) {
+                console.error('Error:', error);
+                statusDiv.textContent = 'Error: ' + error.message;
+                statusDiv.className = 'status error';
+            }
+        }
+    </script>
+</body>
+
+</html>
