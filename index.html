@@ -44,44 +44,57 @@
                         <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
                 </div>
-                <p class="primary-text">Drag & Drop .nc4 file here</p>
+                <p class="primary-text">Drag & Drop .nc4 file(s) here</p>
                 <p class="secondary-text">or</p>
-                <input type="file" id="file-input" accept=".nc4" hidden>
+                <input type="file" id="file-input" accept=".nc4" multiple hidden>
                 <button id="browse-btn" class="btn-primary">Browse Files</button>
             </div>
 
             <div id="status" class="status"></div>
 
-            <div id="actions-section" class="actions-section hidden">
-                <div class="button-group">
-                    <button id="download-btn" class="btn-primary">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                            <polyline points="7 10 12 15 17 10" />
-                            <line x1="12" y1="15" x2="12" y2="3" />
-                        </svg>
-                        Download GeoJSON
-                    </button>
-                    <button id="preview-btn" class="btn-secondary">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                            <circle cx="12" cy="12" r="3" />
-                        </svg>
-                        Preview Data
-                    </button>
-                </div>
-                <div id="preview-container" class="preview-container hidden">
-                    <pre id="preview-content"></pre>
-                </div>
+            <div id="file-list-container" class="file-list-container hidden">
+                <!-- File cards will be dynamically inserted here -->
+            </div>
+
+            <div id="download-all-section" class="download-all-section hidden">
+                <button id="download-all-btn" class="btn-download-all">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="8 17 12 21 16 17"></polyline>
+                        <line x1="12" y1="12" x2="12" y2="21"></line>
+                        <path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"></path>
+                    </svg>
+                    Download All as ZIP
+                </button>
             </div>
         </main>
+
+        <!-- Preview Modal -->
+        <div id="preview-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modal-title">File Preview</h2>
+                    <div class="modal-actions">
+                        <button id="copy-btn" class="btn-icon" title="Copy to Clipboard">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                        <button id="close-modal-btn" class="close-btn">&times;</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <pre id="modal-preview-content"></pre>
+                </div>
+            </div>
+        </div>
 
         <footer>
             <p>Powered by h5wasm & WebAssembly</p>
         </footer>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script type="module">
         import h5wasm from "https://cdn.jsdelivr.net/npm/h5wasm@0.7.4/dist/esm/hdf5_hl.js";
 
@@ -89,23 +102,25 @@
         const fileInput = document.getElementById('file-input');
         const browseBtn = document.getElementById('browse-btn');
         const statusDiv = document.getElementById('status');
-        const actionsSection = document.getElementById('actions-section');
-        const downloadBtn = document.getElementById('download-btn');
-        const previewBtn = document.getElementById('preview-btn');
-        const previewContainer = document.getElementById('preview-container');
-        const previewContent = document.getElementById('preview-content');
+        const fileListContainer = document.getElementById('file-list-container');
+        const downloadAllSection = document.getElementById('download-all-section');
+        const downloadAllBtn = document.getElementById('download-all-btn');
         const includeExtentCheckbox = document.getElementById('include-extent');
+        
+        // Modal elements
+        const previewModal = document.getElementById('preview-modal');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+        const copyBtn = document.getElementById('copy-btn');
+        const modalPreviewContent = document.getElementById('modal-preview-content');
+        const modalTitle = document.getElementById('modal-title');
 
-        let currentGeoJSON = null;
-        let currentFileName = "";
-        let cachedPoints = null;
-        let cachedExtent = null;
+        let convertedFiles = new Map(); // Map of fileName -> {geoJSON, originalFileName}
 
         browseBtn.addEventListener('click', () => fileInput.click());
 
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length) {
-                handleFile(e.target.files[0]);
+                handleFiles(Array.from(e.target.files));
             }
         });
 
@@ -122,167 +137,291 @@
             e.preventDefault();
             dropZone.classList.remove('drag-over');
             if (e.dataTransfer.files.length) {
-                handleFile(e.dataTransfer.files[0]);
+                handleFiles(Array.from(e.dataTransfer.files));
             }
         });
 
-        includeExtentCheckbox.addEventListener('change', () => {
-            if (cachedPoints) {
-                updateGeoJSON();
-                // If preview is open, update it
-                if (!previewContainer.classList.contains('hidden')) {
-                    updatePreviewContent();
-                }
+        includeExtentCheckbox.addEventListener('change', async () => {
+            if (convertedFiles.size > 0) {
+                // Reconvert all files with new extent setting
+                const filesToReconvert = Array.from(convertedFiles.values()).map(f => f.originalFile);
+                convertedFiles.clear();
+                fileListContainer.innerHTML = '';
+                await handleFiles(filesToReconvert);
             }
         });
 
-        downloadBtn.addEventListener('click', () => {
-            if (!currentGeoJSON) return;
+        downloadAllBtn.addEventListener('click', async () => {
+            if (convertedFiles.size === 0) return;
 
-            const blob = new Blob([JSON.stringify(currentGeoJSON)], { type: 'application/json' });
+            const zip = new JSZip();
+
+            for (const [fileName, data] of convertedFiles.entries()) {
+                const geojsonStr = JSON.stringify(data.geoJSON);
+                const geojsonFileName = fileName.replace(/\.nc4?$/i, '') + '.geojson';
+                zip.file(geojsonFileName, geojsonStr);
+            }
+
+            const blob = await zip.generateAsync({ type: 'blob' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-
-            // Fix filename: remove .nc or .nc4 (case insensitive) and append .geojson
-            let downloadName = currentFileName.replace(/\.nc4?$/i, '');
-            downloadName += '.geojson';
-
-            a.download = downloadName;
+            a.download = 'geojson_files.zip';
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
         });
+        // Modal event listeners
+        closeModalBtn.addEventListener('click', () => {
+            previewModal.classList.add('hidden');
+        });
 
-        previewBtn.addEventListener('click', () => {
-            if (!currentGeoJSON) return;
+        copyBtn.addEventListener('click', () => {
+            const text = modalPreviewContent.textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const originalHTML = copyBtn.innerHTML;
+                copyBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                `;
+                setTimeout(() => {
+                    copyBtn.innerHTML = originalHTML;
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+            });
+        });
 
-            if (previewContainer.classList.contains('hidden')) {
-                // Show preview
-                updatePreviewContent();
-                previewContainer.classList.remove('hidden');
-                previewBtn.innerHTML = `
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                    Hide Preview
-                `;
-            } else {
-                // Hide preview
-                previewContainer.classList.add('hidden');
-                previewBtn.innerHTML = `
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    Preview Data
-                `;
+        window.addEventListener('click', (e) => {
+            if (e.target === previewModal) {
+                previewModal.classList.add('hidden');
             }
         });
 
-        function updatePreviewContent() {
-            const previewData = {
-                type: currentGeoJSON.type,
-                featuresCount: currentGeoJSON.features.length,
-                first5Features: currentGeoJSON.features.slice(0, 5)
-            };
-            previewContent.textContent = JSON.stringify(previewData, null, 2);
+        function downloadSingleFile(fileName, geoJSON) {
+            const blob = new Blob([JSON.stringify(geoJSON)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const downloadName = fileName.replace(/\.nc4?$/i, '') + '.geojson';
+            a.download = downloadName;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
         }
 
-        function updateGeoJSON() {
-            if (!cachedPoints) return;
+        function previewFile(fileName) {
+            const data = convertedFiles.get(fileName);
+            if (!data) return;
 
-            const features = [
-                {
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "MultiPoint",
-                        "coordinates": cachedPoints
-                    }
-                }
-            ];
+            const previewData = {
+                type: data.geoJSON.type,
+                featuresCount: data.geoJSON.features.length,
+                first5Features: data.geoJSON.features.slice(0, 5)
+            };
+            
+            modalTitle.textContent = `Preview: ${fileName}`;
+            modalPreviewContent.textContent = JSON.stringify(previewData, null, 2);
+            previewModal.classList.remove('hidden');
+        }
 
-            if (includeExtentCheckbox.checked && cachedExtent) {
-                features.push({
-                    "type": "Feature",
-                    "geometry": cachedExtent
-                });
+        function createFileCard(fileName, geoJSON, status, errorMsg = null) {
+            const card = document.createElement('div');
+            card.className = 'file-card';
+            card.dataset.fileName = fileName;
+
+            const statusClass = status === 'success' ? 'success' : status === 'error' ? 'error' : 'processing';
+            const statusText = status === 'success' ? 'Converted' : status === 'error' ? 'Failed' : 'Processing...';
+
+            // Header
+            const header = document.createElement('div');
+            header.className = 'file-card-header';
+            header.innerHTML = `
+                <span class="file-name">${fileName}</span>
+                <span class="file-status ${statusClass}">${statusText}</span>
+            `;
+            card.appendChild(header);
+
+            if (status === 'success') {
+                const pointCount = geoJSON.features[0].geometry.coordinates.length;
+                const hasExtent = geoJSON.features.length > 1;
+                
+                const info = document.createElement('div');
+                info.className = 'file-card-info';
+                info.innerHTML = `
+                    <span>${pointCount.toLocaleString()} points</span>
+                    ${hasExtent ? '<span>• Extent included</span>' : ''}
+                `;
+                card.appendChild(info);
+
+                const actions = document.createElement('div');
+                actions.className = 'file-card-actions';
+
+                // Preview Button
+                const previewBtn = document.createElement('button');
+                previewBtn.className = 'btn-secondary btn-sm';
+                previewBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    Preview
+                `;
+                previewBtn.onclick = () => previewFile(fileName);
+                actions.appendChild(previewBtn);
+
+                // Download Button
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'btn-download-single';
+                downloadBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download
+                `;
+                downloadBtn.onclick = () => downloadSingleFile(fileName, geoJSON);
+                actions.appendChild(downloadBtn);
+
+                card.appendChild(actions);
+            } else if (status === 'error') {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'file-card-error';
+                errorDiv.textContent = errorMsg || 'Unknown error';
+                card.appendChild(errorDiv);
             }
 
-            currentGeoJSON = {
-                "type": "FeatureCollection",
-                "features": features
-            };
+            return card;
         }
 
-        async function handleFile(file) {
-            if (!file.name.endsWith('.nc4')) {
-                statusDiv.textContent = 'Error: Please upload a .nc4 file.';
+        // Make functions globally accessible for onclick
+        window.downloadFile = function (fileName) {
+            const data = convertedFiles.get(fileName);
+            if (data) {
+                downloadSingleFile(fileName, data.geoJSON);
+            }
+        };
+        
+        window.previewFile = function (fileName) {
+            previewFile(fileName);
+        };
+
+        async function handleFiles(files) {
+            // Filter for .nc4 files
+            const nc4Files = files.filter(f => f.name.endsWith('.nc4'));
+
+            if (nc4Files.length === 0) {
+                statusDiv.textContent = 'Error: Please upload .nc4 file(s).';
                 statusDiv.className = 'status error';
                 return;
             }
 
-            // Reset UI
-            statusDiv.textContent = 'Initializing h5wasm and converting...';
+            // Reset UI for batch processing
+            fileListContainer.innerHTML = '';
+            fileListContainer.classList.remove('hidden');
+            downloadAllSection.classList.add('hidden');
+            statusDiv.textContent = `Processing ${nc4Files.length} file(s)...`;
             statusDiv.className = 'status';
-            actionsSection.classList.add('hidden');
-            previewContainer.classList.add('hidden');
-            currentGeoJSON = null;
-            cachedPoints = null;
-            cachedExtent = null;
-            currentFileName = file.name;
 
-            try {
-                const { FS } = await h5wasm.ready;
+            const { FS } = await h5wasm.ready;
 
-                const arrayBuffer = await file.arrayBuffer();
-                const fileName = file.name;
+            let successCount = 0;
+            let errorCount = 0;
 
-                // Write file to WASM virtual filesystem
-                FS.writeFile(fileName, new Uint8Array(arrayBuffer));
+            for (const file of nc4Files) {
+                // Add a processing card
+                const processingCard = createFileCard(file.name, null, 'processing');
+                fileListContainer.appendChild(processingCard);
 
-                const f = new h5wasm.File(fileName, "r");
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const fileName = file.name;
 
-                // Read variables
-                // Note: h5wasm returns data as typed arrays. We need to convert them to normal arrays for GeoJSON
-                const lonVar = f.get("lon");
-                const latVar = f.get("lat");
+                    // Write file to WASM virtual filesystem
+                    FS.writeFile(fileName, new Uint8Array(arrayBuffer));
 
-                if (!lonVar || !latVar) {
-                    throw new Error("Could not find 'lon' or 'lat' variables in the file.");
-                }
+                    const f = new h5wasm.File(fileName, "r");
 
-                const lonData = lonVar.value;
-                const latData = latVar.value;
+                    // Read variables
+                    const lonVar = f.get("lon");
+                    const latVar = f.get("lat");
 
-                const lonLatList = [];
-                for (let i = 0; i < lonData.length; i++) {
-                    lonLatList.push([Number(lonData[i]), Number(latData[i])]);
-                }
-                cachedPoints = lonLatList;
-
-                // Check for extent attribute
-                // In h5wasm, attributes are accessed via .attrs
-                // The python code used json.loads(ds.extent), implying it's a JSON string
-                if (f.attrs["extent"]) {
-                    try {
-                        cachedExtent = JSON.parse(f.attrs["extent"].value);
-                    } catch (e) {
-                        console.warn("Failed to parse extent attribute:", e);
+                    if (!lonVar || !latVar) {
+                        throw new Error("Could not find 'lon' or 'lat' variables in the file.");
                     }
+
+                    const lonData = lonVar.value;
+                    const latData = latVar.value;
+
+                    const lonLatList = [];
+                    for (let i = 0; i < lonData.length; i++) {
+                        lonLatList.push([Number(lonData[i]), Number(latData[i])]);
+                    }
+
+                    const features = [
+                        {
+                            "type": "Feature",
+                            "geometry": {
+                                "type": "MultiPoint",
+                                "coordinates": lonLatList
+                            }
+                        }
+                    ];
+
+                    // Check for extent attribute
+                    if (includeExtentCheckbox.checked && f.attrs["extent"]) {
+                        try {
+                            const extent = JSON.parse(f.attrs["extent"].value);
+                            features.push({
+                                "type": "Feature",
+                                "geometry": extent
+                            });
+                        } catch (e) {
+                            console.warn("Failed to parse extent attribute:", e);
+                        }
+                    }
+
+                    const geoJSON = {
+                        "type": "FeatureCollection",
+                        "features": features
+                    };
+
+                    f.close();
+                    FS.unlink(fileName);
+
+                    // Store the converted file
+                    convertedFiles.set(file.name, { geoJSON, originalFile: file });
+
+                    // Update card to success
+                    processingCard.replaceWith(createFileCard(file.name, geoJSON, 'success'));
+                    successCount++;
+
+                } catch (error) {
+                    console.error(`Error processing ${file.name}:`, error);
+                    processingCard.replaceWith(createFileCard(file.name, null, 'error', error.message));
+                    errorCount++;
                 }
+            }
 
-                f.close();
-                // Clean up file from WASM FS
-                FS.unlink(fileName);
-
-                // Generate initial GeoJSON
-                updateGeoJSON();
-
-                statusDiv.textContent = 'Conversion successful! Ready to download.';
+            // Update status
+            if (errorCount === 0) {
+                statusDiv.textContent = `Successfully converted ${successCount} file(s)!`;
                 statusDiv.className = 'status success';
-                actionsSection.classList.remove('hidden');
-
-            } catch (error) {
-                console.error('Error:', error);
-                statusDiv.textContent = 'Error: ' + error.message;
+            } else if (successCount === 0) {
+                statusDiv.textContent = `Failed to convert all ${errorCount} file(s).`;
                 statusDiv.className = 'status error';
+            } else {
+                statusDiv.textContent = `Converted ${successCount} file(s), ${errorCount} failed.`;
+                statusDiv.className = 'status';
+            }
+
+            // Show download all button if we have successful conversions
+            if (successCount > 0) {
+                downloadAllSection.classList.remove('hidden');
             }
         }
     </script>
