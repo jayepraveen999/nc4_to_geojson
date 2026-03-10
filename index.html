@@ -246,8 +246,12 @@
             card.appendChild(header);
 
             if (status === 'success') {
-                const pointCount = geoJSON.features[0].geometry.coordinates.length;
-                const hasExtent = geoJSON.features.length > 1;
+                const pointCount = geoJSON.features.filter(
+                    (feature) => feature?.geometry?.type === 'Point'
+                ).length;
+                const hasExtent = geoJSON.features.some(
+                    (feature) => feature?.geometry?.type !== 'Point'
+                );
                 
                 const info = document.createElement('div');
                 info.className = 'file-card-info';
@@ -362,15 +366,16 @@
                         lonLatList.push([Number(lonData[i]), Number(latData[i])]);
                     }
 
-                    const features = [
-                        {
-                            "type": "Feature",
-                            "geometry": {
-                                "type": "MultiPoint",
-                                "coordinates": lonLatList
-                            }
+                    const features = lonLatList.map((coordinates, index) => ({
+                        "type": "Feature",
+                        "properties": {
+                            "point_index": index
+                        },
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": coordinates
                         }
-                    ];
+                    }));
 
                     // Check for extent attribute
                     if (includeExtentCheckbox.checked && f.attrs["extent"]) {

@@ -12,11 +12,15 @@ def convert_nc4_to_geojson(nc4_path, extent=True):
     features = [
         {
             "type": "Feature",
+            "properties": {
+                "point_index": idx,
+            },
             "geometry": {
-                "type": "MultiPoint",
-                "coordinates": lon_lat_list
-            }
+                "type": "Point",
+                "coordinates": [lon, lat],
+            },
         }
+        for idx, (lon, lat) in enumerate(lon_lat_list)
     ]
     if extent:
         features.append({
